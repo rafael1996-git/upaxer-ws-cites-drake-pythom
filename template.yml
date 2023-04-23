@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SAM Template For Lambda Resource
+Parameters:
+  Environment:
+    Type: String
+  Name:
+    Type: String
+  Version:
+    Type: String
+  SecretOracle:
+    Type: String
+  MongoDb:
+    Type: String
+  BucketName:
+    Type: String
+Mappings:
+  Configuration:
+    dev:
+      ReservedConcurrentExecutions: 50
+      LambdaSecurityGroupIds:
+        - sg-0f4b1287f9f690fea
+      LambdaSubnetIds:
+        - subnet-03692d93cc69db081
+        - subnet-004299ac81d4b8c0d
+      CodeDeployRole: DevOpsCodeDeploy
+      CodeDeployType: CodeDeployDefault.LambdaAllAtOnce
+      MemorySize: 512
+      Timeout: 30
+    qa:
+      ReservedConcurrentExecutions: 1
+      LambdaSecurityGroupIds:
+        - sg-0e64a3a2d0882a352
+      LambdaSubnetIds:
+        - subnet-03807f0337a201889
+        - subnet-0290dd7055dfd6e9f
+      CodeDeployRole: DevOpsCodeDeploy
+      CodeDeployType: CodeDeployDefault.LambdaAllAtOnce
+      MemorySize: 512
+      Timeout: 30
+    prod:
+      ReservedConcurrentExecutions: 1
+      LambdaSecurityGroupIds:
+        - sg-40d6ad35
+      LambdaSubnetIds:
+        - subnet-09389e54
+        - subnet-e9238ec6
+      CodeDeployRole: DevOpsCodeDeploy
+      CodeDeployType: CodeDeployDefault.LambdaAllAtOnce
+      MemorySize: 512
+      Timeout: 30
+  Layers:
+    dev:
+      CxOracleLayer: 'cx-oracle-layer:12'
+      FlaskLayer: 'flask-layer:3'
+    qa:
+      CxOracleLayer: 'cx-oracle-layer:1'
+      FlaskLayer: 'flask-layer:2'
+    prod:
+      CxOracleLayer: 'cx-oracle-lyer:1'
+      FlaskLayer: 'flask-layer:1'
+  Variables:
+    dev:
+      Environment: dev
+      BucketLog: upaxer-adm-dev
+      ConfigFile: config_sls/upaxer-access-credentials.json
+    qa:
+      Environment: qa
+      BucketLog: upaxer-adm-qa
+      ConfigFile: config_sls/upaxer-access-credentials.json
+    prod:
+      Environment: prod
+      BucketLog: upaxer-adm-prod
+      ConfigFile: config_sls/upaxer-access-credentials.json
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Description: !Sub
+        - "Role for lambda ${Name}"
+        - {Name: !Ref Name}
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Path: /devops/
+      Policies:
+        - PolicyName: !Ref Name
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: !Sub
+                  - 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:${Name}'
+                  - { Name: !Ref Name }
+      RoleName: !Ref Name
+      Tags:
+        - Key: "Type"
+          Value: "devops"
+  LambdaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: LambdaFunction
+    Properties:
+      AlarmName: !Ref Name
+      AlarmDescription: Alarma de pruebas
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Maximum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '1'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: Name
+          Value:
+            Ref: LambdaFunction
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Ref Name
+      CodeUri: dist
+      Handler: wsgi_handler.handler
+      Runtime: python3.7
+      MemorySize: !FindInMap [ Configuration, !Ref Environment, MemorySize ]
+      Timeout: !FindInMap [ Configuration, !Ref Environment, Timeout ]
+      Description: !Sub
+          - "Release Version ${Version}"
+          - { Version: !Ref Version }
+      ReservedConcurrentExecutions: !FindInMap [ Configuration, !Ref Environment, ReservedConcurrentExecutions] #No modificar
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - 'lambda:InvokeFunction'
+              Resource: !Sub
+                - 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:${Name}'
+                - { Name: !Ref Name }
+      Layers:
+        - !Sub
+          - "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:${Layer}"
+          - { Layer: !FindInMap [ Layers, !Ref Environment, CxOracleLayer ] }
+        - !Sub
+          - "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:${Layer}"
+          - { Layer: !FindInMap [ Layers, !Ref Environment, FlaskLayer ] }
+      Environment:
+        Variables:
+          APP_NAME: !Ref Name
+          ENVIRONMENT: !Ref Environment
+          BUCKET_LOG: !FindInMap [ Variables, !Ref Environment, BucketLog ]
+          BUCKET_NAME: !Ref BucketName
+          CONFIG_FILE: !FindInMap [ Variables, !Ref Environment, ConfigFile ]
+          SECRET_ORACLE: !Ref SecretOracle
+          SECRET_MONGO: !Ref MongoDb
+      AutoPublishAlias: live
+      Role: !Sub
+        - "arn:aws:iam::${AWS::AccountId}:role/devops/${LambdaRole}"
+        - { LambdaRole: !Ref LambdaRole }
+      DeploymentPreference:
+        Role: !Sub
+          - "arn:aws:iam::${AWS::AccountId}:role/${CodeDeployRole}"
+          - { CodeDeployRole: !FindInMap [ Configuration, !Ref Environment, CodeDeployRole ] }
+        Type: !FindInMap [ Configuration, !Ref Environment, CodeDeployType ]
+      VpcConfig:
+        SecurityGroupIds: !FindInMap [ Configuration, !Ref Environment, LambdaSecurityGroupIds ] #No modificar
+        SubnetIds: !FindInMap [ Configuration, !Ref Environment, LambdaSubnetIds ]

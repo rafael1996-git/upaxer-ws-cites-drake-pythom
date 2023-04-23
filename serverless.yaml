@@ -1,0 +1,25 @@
+service: upaxer-ws-cites-drake
+provider:
+  name: aws
+  environment:
+    version: 3.0.0
+
+plugins:
+  - serverless-wsgi
+
+package:
+  exclude:
+    - venv/**
+    - package-lock.json
+    - package.json
+    - node_modules/**
+
+custom:
+  wsgi:
+    app: app.app
+    packRequirements: false
+
+functions:
+  app:
+    name: ${self:service}
+    handler: wsgi_handler.handler

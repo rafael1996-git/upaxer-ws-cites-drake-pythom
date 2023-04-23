@@ -1,0 +1,32 @@
+version: 0.2
+env:
+  exported-variables:
+    - APP_NAME
+    - APP_VERSION
+    - APP_ENVIRONMENT
+phases:
+  install:
+    runtime-versions:
+      python: 3.7
+    commands:
+      - npm install -g serverless
+      - npm install js-yaml
+  pre_build:
+    commands:
+      - APP_NAME=$(node -p -e "require('js-yaml').load(require('fs').readFileSync('./serverless.yaml', 'utf8'))['service']")
+      - APP_VERSION=$(node -p -e "require('js-yaml').load(require('fs').readFileSync('./serverless.yaml', 'utf8'))['version']")
+      - sls plugin install -n serverless-wsgi
+  build:
+    commands:
+      - sls package
+  post_build:
+    commands:
+      - unzip .serverless/$APP_NAME.zip -d ./dist
+      - rm -fr .serverless
+      - aws s3 cp s3://$BUCKET_NAME/config/$APP_ENVIRONMENT/template.json ./template.json
+      - aws cloudformation package --template-file template.yml --s3-bucket $BUCKET_NAME --output-template-file outputtemplate.yml --kms-key-id $KMS_KEY_ID --s3-prefix $APP_NAME/Artifacts
+artifacts:
+  files:
+    - template.yml
+    - outputtemplate.yml
+    - template.json
